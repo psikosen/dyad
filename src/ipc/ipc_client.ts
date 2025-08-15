@@ -1069,4 +1069,10 @@ export class IpcClient {
   public async getTemplates(): Promise<Template[]> {
     return this.ipcRenderer.invoke("get-templates");
   }
+
+  public async runMultiAgent(
+    task: string,
+  ): Promise<{ success: boolean; output?: string; error?: string }> {
+    return this.ipcRenderer.invoke("run-multi-agent", task);
+  }
 }
