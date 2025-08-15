@@ -29,6 +29,8 @@ import { registerAppEnvVarsHandlers } from "./handlers/app_env_vars_handlers";
 import { registerTemplateHandlers } from "./handlers/template_handlers";
 import { registerPortalHandlers } from "./handlers/portal_handlers";
 import { registerMultiAgentHandlers } from "./handlers/multi_agent_handlers";
+import { registerFileSystemHandlers } from "./handlers/file_system_handlers";
+import { registerPythonServiceHandlers } from "./handlers/python_service_handlers";
 
 export function registerIpcHandlers() {
   // Register all IPC handlers by category
@@ -63,4 +65,6 @@ export function registerIpcHandlers() {
   registerTemplateHandlers();
   registerPortalHandlers();
   registerMultiAgentHandlers();
+  registerFileSystemHandlers();
+  registerPythonServiceHandlers();
 }
