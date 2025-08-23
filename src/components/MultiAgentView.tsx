@@ -1,43 +1,75 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import ChatMessage from "./chat/ChatMessage";
+import { HomeChatInput } from "./chat/HomeChatInput";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { IpcClient } from "../ipc/ipc_client";
 import { useAtom } from "jotai";
-import { selectedAppIdAtom } from "../atoms/appAtoms";
+import { selectedAppIdAtom } from "@/atoms/appAtoms";
+import { homeChatInputValueAtom } from "@/atoms/chatAtoms";
+import { Message } from "@/ipc/ipc_types";
+import { IpcClient } from "@/ipc/ipc_client";
+import type { HomeSubmitOptions } from "@/pages/home";
 import { ConversationTurn } from "../multi_agent/Orchestrator";
-import { useEffect } from "react";
 
 export function MultiAgentView() {
-  const [task, setTask] = useState("");
-  const [conversationHistory, setConversationHistory] = useState<
-    ConversationTurn[]
-  >([]);
-  const [finalCode, setFinalCode] = useState("");
-  const [error, setError] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedAppId] = useAtom(selectedAppIdAtom);
+  const [error, setError] = useState("");
   const [trainingStatus, setTrainingStatus] = useState("");
+  const [selectedAppId] = useAtom(selectedAppIdAtom);
+  const [inputValue, setInputValue] = useAtom(homeChatInputValueAtom);
 
-  const handleRun = async () => {
-    if (!task || !selectedAppId) return;
+  const appendAssistantMessages = (
+    turns: ConversationTurn[],
+    finalCode?: string,
+  ) => {
+    const startId = Date.now();
+    const newMessages: Message[] = turns.map((turn, index) => ({
+      id: startId + index + 1,
+      role: "assistant",
+      content: `**${turn.agentName}**\n\n**Thoughts**:\n${turn.thoughts}\n\n**Output**:\n${turn.output}`,
+    }));
+    if (finalCode) {
+      newMessages.push({
+        id: startId + turns.length + 1,
+        role: "assistant",
+        content: `**Final Code**:\n\`\`\`\n${finalCode}\n\`\`\``,
+      });
+    }
+    setMessages((prev) => [...prev, ...newMessages]);
+  };
+
+  const handleSubmit = async (_options?: HomeSubmitOptions) => {
+    if (!inputValue.trim() || !selectedAppId) return;
+    const userMessage: Message = {
+      id: Date.now(),
+      role: "user",
+      content: inputValue,
+    };
+    setMessages((prev) => [...prev, userMessage]);
+    const task = inputValue;
+    setInputValue("");
     setIsLoading(true);
-    setConversationHistory([]);
-    setFinalCode("");
     setError("");
-
     const result = await IpcClient.getInstance().runMultiAgent(
       task,
       selectedAppId,
     );
-
     if (result.success) {
-      setConversationHistory(result.conversationHistory || []);
-      setFinalCode(result.finalCode || "");
+      appendAssistantMessages(
+        result.conversationHistory || [],
+        result.finalCode,
+      );
     } else {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          role: "assistant",
+          content: result.error || "An unknown error occurred.",
+        },
+      ]);
       setError(result.error || "An unknown error occurred.");
     }
-
     setIsLoading(false);
   };
 
@@ -52,14 +84,12 @@ export function MultiAgentView() {
 
   useEffect(() => {
     IpcClient.getInstance().startPythonService();
-
     const interval = setInterval(async () => {
       const result = await IpcClient.getInstance().getTrainingStatus();
       if (result.success) {
         setTrainingStatus(result.data.status);
       }
     }, 5000);
-
     return () => {
       clearInterval(interval);
       IpcClient.getInstance().stopPythonService();
@@ -67,54 +97,31 @@ export function MultiAgentView() {
   }, []);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Multi-Agent Code Generation</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          <Input
-            placeholder="Enter your request..."
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-          />
-          <Button onClick={handleRun} disabled={isLoading}>
-            {isLoading ? "Running..." : "Run"}
-          </Button>
-          <Button onClick={handleTrain} disabled={isLoading}>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2 border-b">
+        <h1 className="text-lg font-semibold">Multi-Agent Chat</h1>
+        <div className="flex items-center gap-2">
+          <Button onClick={handleTrain} disabled={isLoading} size="sm">
             Train Agents
           </Button>
-          {trainingStatus && <p>Training Status: {trainingStatus}</p>}
-          {error && <p className="text-red-500">{error}</p>}
-          <div className="space-y-4">
-            {conversationHistory.map((turn, index) => (
-              <Card key={index}>
-                <CardHeader>
-                  <CardTitle>{turn.agentName}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="font-bold">Thoughts:</p>
-                  <pre className="p-2 bg-gray-100 rounded-md">
-                    {turn.thoughts}
-                  </pre>
-                  <p className="mt-2 font-bold">Output:</p>
-                  <pre className="p-2 bg-gray-100 rounded-md">
-                    <code>{turn.output}</code>
-                  </pre>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-          {finalCode && (
-            <div>
-              <h3 className="text-lg font-bold mt-4">Final Code:</h3>
-              <pre className="p-4 bg-gray-800 text-white rounded-md">
-                <code>{finalCode}</code>
-              </pre>
-            </div>
+          {trainingStatus && (
+            <span className="text-sm" data-testid="training-status">
+              {trainingStatus}
+            </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message, index) => (
+          <ChatMessage
+            key={message.id}
+            message={message}
+            isLastMessage={index === messages.length - 1}
+          />
+        ))}
+        {error && <p className="text-red-500">{error}</p>}
+      </div>
+      <HomeChatInput onSubmit={handleSubmit} />
+    </div>
   );
 }

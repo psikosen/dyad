@@ -1,3 +1,4 @@
+import { ipcMain } from "electron";
 import { registerAppHandlers } from "./handlers/app_handlers";
 import { registerChatHandlers } from "./handlers/chat_handlers";
 import { registerChatStreamHandlers } from "./handlers/chat_stream_handlers";
@@ -31,6 +32,8 @@ import { registerPortalHandlers } from "./handlers/portal_handlers";
 import { registerMultiAgentHandlers } from "./handlers/multi_agent_handlers";
 import { registerFileSystemHandlers } from "./handlers/file_system_handlers";
 import { registerPythonServiceHandlers } from "./handlers/python_service_handlers";
+
+export const ipcHost = ipcMain;
 
 export function registerIpcHandlers() {
   // Register all IPC handlers by category

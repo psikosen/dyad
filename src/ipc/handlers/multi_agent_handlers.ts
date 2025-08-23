@@ -1,10 +1,14 @@
 import { ipcHost } from "../ipc_host";
 import { Orchestrator } from "../../multi_agent/Orchestrator";
+import type { IpcMainInvokeEvent } from "electron";
 
 export function registerMultiAgentHandlers() {
   ipcHost.handle(
     "run-multi-agent",
-    async (_, { task, appId }: { task: string; appId: number }) => {
+    async (
+      _: IpcMainInvokeEvent,
+      { task, appId }: { task: string; appId: number },
+    ) => {
       try {
         const orchestrator = new Orchestrator();
         const result = await orchestrator.run(task, appId);

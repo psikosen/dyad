@@ -4,6 +4,7 @@ import path from "node:path";
 import { db } from "../../db";
 import { apps } from "../../db/schema";
 import { eq } from "drizzle-orm";
+import type { IpcMainInvokeEvent } from "electron";
 
 async function getAppPath(appId: number): Promise<string> {
   const app = await db.query.apps.findFirst({
@@ -18,7 +19,10 @@ async function getAppPath(appId: number): Promise<string> {
 export function registerFileSystemHandlers() {
   ipcHost.handle(
     "fs:readFile",
-    async (_, { appId, filePath }: { appId: number; filePath: string }) => {
+    async (
+      _: IpcMainInvokeEvent,
+      { appId, filePath }: { appId: number; filePath: string },
+    ) => {
       try {
         const appPath = await getAppPath(appId);
         const absolutePath = path.join(appPath, filePath);
@@ -42,7 +46,7 @@ export function registerFileSystemHandlers() {
   ipcHost.handle(
     "fs:writeFile",
     async (
-      _,
+      _: IpcMainInvokeEvent,
       {
         appId,
         filePath,
