@@ -4,6 +4,17 @@ import { Orchestrator } from "../multi_agent/Orchestrator";
 import { vi } from "vitest";
 import * as llmHelper from "../multi_agent/llm_helper";
 
+const mockFsWriteFile = vi.fn();
+vi.mock("../ipc/ipc_client", () => ({
+  IpcClient: {
+    getInstance: vi.fn(() => ({
+      fsWriteFile: mockFsWriteFile,
+      fsReadFile: vi.fn(),
+      streamMessage: vi.fn(),
+    })),
+  },
+}));
+
 vi.mock("../multi_agent/llm_helper", () => ({
   callLlm: vi.fn(),
 }));
@@ -13,6 +24,7 @@ const mockedCallLlm = vi.mocked(llmHelper.callLlm);
 describe("Multi-Agent System", () => {
   beforeEach(() => {
     mockedCallLlm.mockClear();
+    mockFsWriteFile.mockClear();
   });
 
   it("CoderAgent should return thoughts and code", async () => {
@@ -28,12 +40,12 @@ function add(a: number, b: number): number {
 `;
     mockedCallLlm.mockResolvedValue(mockResponse);
 
-    const coder = new CoderAgent();
+    const coder = new CoderAgent(1);
     const result = await coder.execute("Create a function to add two numbers");
 
     expect(result.thoughts).toContain("The user wants a function");
     expect(result.output).toContain("function add");
-    expect(mockedCallLlm).toHaveBeenCalledOnce();
+    expect(mockedCallLlm).toHaveBeenCalledTimes(1);
   });
 
   it("ReviewerAgent should return thoughts and feedback", async () => {
@@ -52,7 +64,7 @@ The code looks good, but you could add a check for null inputs.
 
     expect(result.thoughts).toContain("The code is simple");
     expect(result.output).toContain("add a check for null inputs");
-    expect(mockedCallLlm).toHaveBeenCalledOnce();
+    expect(mockedCallLlm).toHaveBeenCalledTimes(1);
   });
 
   it("Orchestrator should run the workflow", async () => {
@@ -88,8 +100,7 @@ Thinking about the second turn.
       .mockResolvedValueOnce(reviewerResponse); // For the second review
 
     const orchestrator = new Orchestrator();
-    // @ts-expect-error - CoderAgent now takes an appId
-    const finalCode = await orchestrator.run("Create a function");
+    const { finalCode } = await orchestrator.run("Create a function", 1);
 
     expect(finalCode).toContain("// Second version of the code");
     expect(mockedCallLlm).toHaveBeenCalledTimes(4);
@@ -118,10 +129,40 @@ LGTM! [APPROVED]
       .mockResolvedValueOnce(reviewerResponseWithApproval);
 
     const orchestrator = new Orchestrator();
-    // @ts-expect-error - CoderAgent now takes an appId
-    const finalCode = await orchestrator.run("Create a function");
+    const { finalCode } = await orchestrator.run("Create a function", 1);
 
     expect(finalCode).toContain("// Some code");
     expect(mockedCallLlm).toHaveBeenCalledTimes(2);
+  });
+
+  it("CoderAgent should write files when tool call is provided", async () => {
+    const toolCall = `
+<thinking>
+Need to write the initial file.
+</thinking>
+<tool name="fileSystem" args='{"operation":"writeFile","path":"/tmp/index.ts","content":"console.log(\\"hi\\")"}' />
+`;
+    const finalResponse = `
+<thinking>
+File written. Returning code to import.
+</thinking>
+<code>
+console.log("done");
+</code>
+`;
+
+    mockedCallLlm
+      .mockResolvedValueOnce(toolCall)
+      .mockResolvedValueOnce(finalResponse);
+
+    const coder = new CoderAgent(123);
+    const result = await coder.execute("Create a file");
+
+    expect(mockFsWriteFile).toHaveBeenCalledWith(
+      123,
+      "/tmp/index.ts",
+      'console.log("hi")',
+    );
+    expect(result.output).toContain('console.log("done")');
   });
 });
