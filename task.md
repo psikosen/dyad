@@ -1,6 +1,6 @@
 # Task List
 
-- [x] Review telemetry consent banner TODOs and confirm design approach.
-- [x] Implement telemetry banner state management, interactions, and logging.
-- [x] Add regression tests covering telemetry banner accept/reject/later flows.
-- [x] Run linting and unit test suites for the updated code.
+- [x] Audit telemetry consent TODOs and confirm scope (no outstanding TODO markers; banner state + tests in focus).
+- [x] Improve TelemetryBanner state persistence (remind-later timers, storage cleanup, settings integration).
+- [x] Expand TelemetryBanner unit tests across accept/reject/later flows and reminder persistence.
+- [x] Run linting and unit test suites for verification.

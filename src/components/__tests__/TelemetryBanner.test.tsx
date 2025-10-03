@@ -6,6 +6,7 @@ import {
   fireEvent,
   cleanup,
   waitFor,
+  act,
 } from "@testing-library/react";
 import { Provider as JotaiProvider } from "jotai";
 import { PrivacyBanner } from "../TelemetryBanner";
@@ -41,45 +42,100 @@ const baseSettings: UserSettings = {
 
 describe("TelemetryBanner", () => {
   const mockedUseSettings = vi.mocked(useSettings);
+  const reminderInterval = 1000 * 60 * 60 * 24 * 7;
+  let currentSettings: UserSettings;
 
   beforeEach(() => {
-    mockedUseSettings.mockReturnValue({
-      settings: baseSettings,
-      envVars: {},
-      loading: false,
-      error: null,
-      updateSettings: mockUpdateSettings,
-      refreshSettings: vi.fn(),
-    } as unknown as ReturnType<typeof useSettings>);
+    currentSettings = { ...baseSettings };
     mockUpdateSettings.mockReset();
+    mockUpdateSettings.mockImplementation(async (partial) => {
+      currentSettings = {
+        ...currentSettings,
+        ...partial,
+      };
+      return currentSettings;
+    });
+    mockedUseSettings.mockImplementation(
+      () =>
+        ({
+          settings: currentSettings,
+          envVars: {},
+          loading: false,
+          error: null,
+          updateSettings: mockUpdateSettings,
+          refreshSettings: vi.fn(),
+        }) as unknown as ReturnType<typeof useSettings>,
+    );
     window.localStorage.clear();
   });
 
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
+    mockedUseSettings.mockReset();
   });
 
-  it("renders banner when telemetry consent is unset", () => {
-    mockUpdateSettings.mockResolvedValue({ ...baseSettings });
-    render(
+  function renderBanner() {
+    return render(
       <JotaiProvider>
         <PrivacyBanner />
       </JotaiProvider>,
     );
+  }
+
+  function mockTimeouts() {
+    const callbacks: Array<() => void> = [];
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const originalClearTimeout = window.clearTimeout.bind(window);
+    const timeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      _timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof _timeout === "number" && _timeout > 1000) {
+        const index = callbacks.push(() => {
+          if (typeof handler === "function") {
+            handler(...args);
+          }
+          callbacks[index - 1] = () => {};
+        });
+        return -index as unknown as number;
+      }
+      return originalSetTimeout(
+        handler as Parameters<typeof window.setTimeout>[0],
+        _timeout as Parameters<typeof window.setTimeout>[1],
+        ...args,
+      );
+    }) as unknown as typeof window.setTimeout);
+
+    const clearTimeoutSpy = vi
+      .spyOn(window, "clearTimeout")
+      .mockImplementation((handle?: number | null) => {
+        if (typeof handle === "number" && handle < 0) {
+          const index = Math.abs(handle) - 1;
+          if (callbacks[index]) {
+            callbacks[index] = () => {};
+          }
+          return;
+        }
+        originalClearTimeout(handle as number);
+      });
+
+    return {
+      callbacks,
+      restore: () => {
+        timeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      },
+    };
+  }
+
+  it("renders banner when telemetry consent is unset", () => {
+    renderBanner();
     expect(screen.getByTestId("telemetry-accept-button")).toBeTruthy();
   });
 
   it("updates settings when accepting telemetry", async () => {
-    mockUpdateSettings.mockResolvedValue({
-      ...baseSettings,
-      telemetryConsent: "opted_in",
-    });
-    render(
-      <JotaiProvider>
-        <PrivacyBanner />
-      </JotaiProvider>,
-    );
+    renderBanner();
 
     fireEvent.click(screen.getByTestId("telemetry-accept-button"));
 
@@ -88,45 +144,103 @@ describe("TelemetryBanner", () => {
         telemetryConsent: "opted_in",
       });
     });
-  });
-
-  it("snoozes banner when selecting remind later", async () => {
-    mockUpdateSettings.mockResolvedValue({ ...baseSettings });
-    const { unmount } = render(
-      <JotaiProvider>
-        <PrivacyBanner />
-      </JotaiProvider>,
-    );
-
-    fireEvent.click(screen.getByTestId("telemetry-later-button"));
-
-    const storedValue = window.localStorage.getItem(
-      "dyadTelemetryBannerRemindAt",
-    );
-    expect(storedValue).not.toBeNull();
-    expect(Number(storedValue)).toBeGreaterThan(Date.now());
-    await waitFor(() => {
-      expect(screen.queryByTestId("telemetry-accept-button")).toBeNull();
-    });
-
-    // Simulate the reminder expiry on a subsequent app load.
-    window.localStorage.setItem(
-      "dyadTelemetryBannerRemindAt",
-      String(Date.now() - 1000),
-    );
-    unmount();
-
-    render(
-      <JotaiProvider>
-        <PrivacyBanner />
-      </JotaiProvider>,
-    );
 
     await waitFor(() => {
       expect(
         window.localStorage.getItem("dyadTelemetryBannerRemindAt"),
       ).toBeNull();
     });
+    expect(screen.queryByTestId("telemetry-accept-button")).toBeNull();
+  });
+
+  it("updates settings when rejecting telemetry", async () => {
+    renderBanner();
+
+    fireEvent.click(screen.getByTestId("telemetry-reject-button"));
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith({
+        telemetryConsent: "opted_out",
+      });
+    });
+    await waitFor(() => {
+      expect(
+        window.localStorage.getItem("dyadTelemetryBannerRemindAt"),
+      ).toBeNull();
+    });
+    expect(screen.queryByTestId("telemetry-accept-button")).toBeNull();
+  });
+
+  it("keeps banner visible when settings update fails", async () => {
+    mockUpdateSettings.mockImplementation(async () => {
+      throw new Error("failed to update");
+    });
+    renderBanner();
+
+    fireEvent.click(screen.getByTestId("telemetry-accept-button"));
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith({
+        telemetryConsent: "opted_in",
+      });
+    });
+
     expect(screen.getByTestId("telemetry-accept-button")).toBeTruthy();
+  });
+
+  it("snoozes banner when selecting remind later and restores after interval", async () => {
+    const timers = mockTimeouts();
+    try {
+      renderBanner();
+
+      fireEvent.click(screen.getByTestId("telemetry-later-button"));
+
+      const storedValue = window.localStorage.getItem(
+        "dyadTelemetryBannerRemindAt",
+      );
+      expect(storedValue).not.toBeNull();
+      await waitFor(() => {
+        expect(screen.queryByTestId("telemetry-accept-button")).toBeNull();
+      });
+      expect(timers.callbacks.length).toBeGreaterThan(0);
+      act(() => {
+        timers.callbacks.forEach((callback) => callback());
+      });
+
+      expect(
+        window.localStorage.getItem("dyadTelemetryBannerRemindAt"),
+      ).toBeNull();
+      expect(screen.getByTestId("telemetry-accept-button")).toBeTruthy();
+    } finally {
+      timers.restore();
+    }
+  });
+
+  it("respects stored remind-later timestamp on initial render", async () => {
+    const timers = mockTimeouts();
+    try {
+      const futureReminder = Date.now() + reminderInterval;
+      window.localStorage.setItem(
+        "dyadTelemetryBannerRemindAt",
+        futureReminder.toString(),
+      );
+
+      renderBanner();
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("telemetry-accept-button")).toBeNull();
+      });
+      expect(timers.callbacks.length).toBeGreaterThan(0);
+      act(() => {
+        timers.callbacks.forEach((callback) => callback());
+      });
+
+      expect(
+        window.localStorage.getItem("dyadTelemetryBannerRemindAt"),
+      ).toBeNull();
+      expect(screen.getByTestId("telemetry-accept-button")).toBeTruthy();
+    } finally {
+      timers.restore();
+    }
   });
 });
