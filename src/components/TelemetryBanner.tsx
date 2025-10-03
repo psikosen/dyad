@@ -4,14 +4,127 @@ import { Button } from "./ui/button";
 import { atom, useAtom } from "jotai";
 import { useSettings } from "@/hooks/useSettings";
 
+const TELEMETRY_REMIND_LATER_KEY = "dyadTelemetryBannerRemindAt";
+const TELEMETRY_REMIND_LATER_INTERVAL_MS = 1000 * 60 * 60 * 24 * 7;
+const SHERLOCK_PROMPT = `Continuous skepticism (Sherlock Protocol)
+* Could this change affect unexpected files/systems?
+* Any hidden dependencies or cascades?
+* What edge cases and failure modes are unhandled?
+* If stuck, work backward from the desired outcome.`;
+
 const hideBannerAtom = atom(false);
+
+type TelemetryAction = "opted_in" | "opted_out" | "later";
+
+function logTelemetryInteraction(
+  functionName: string,
+  message: string,
+  action: TelemetryAction,
+  error: unknown = null,
+) {
+  const logEntry = {
+    filename: "src/components/TelemetryBanner.tsx",
+    timestamp: new Date().toISOString(),
+    classname: "PrivacyBanner",
+    function: functionName,
+    system_section: "ui.telemetry",
+    line_num: 0,
+    error: error instanceof Error ? error.message : error,
+    db_phase: "none" as const,
+    method: "NONE" as const,
+    message,
+    action,
+  };
+  console.info(JSON.stringify(logEntry));
+  console.info(SHERLOCK_PROMPT);
+}
+
+const isBrowser = typeof window !== "undefined";
+
+function readRemindLaterTimestamp(): number | null {
+  if (!isBrowser) {
+    return null;
+  }
+  const storedValue = window.localStorage.getItem(TELEMETRY_REMIND_LATER_KEY);
+  if (!storedValue) {
+    return null;
+  }
+  const parsedValue = Number.parseInt(storedValue, 10);
+  if (Number.isNaN(parsedValue)) {
+    window.localStorage.removeItem(TELEMETRY_REMIND_LATER_KEY);
+    return null;
+  }
+  return parsedValue;
+}
+
+function persistRemindLaterTimestamp(timestamp: number | null) {
+  if (!isBrowser) {
+    return;
+  }
+  if (timestamp === null) {
+    window.localStorage.removeItem(TELEMETRY_REMIND_LATER_KEY);
+    return;
+  }
+  window.localStorage.setItem(TELEMETRY_REMIND_LATER_KEY, timestamp.toString());
+}
 
 export function PrivacyBanner() {
   const [hideBanner, setHideBanner] = useAtom(hideBannerAtom);
   const { settings, updateSettings } = useSettings();
-  // TODO: Implement state management for banner visibility and user choice
-  // TODO: Implement functionality for Accept, Reject, Ask me later buttons
-  // TODO: Add state to hide/show banner based on user choice
+  const [isProcessing, setIsProcessing] = React.useState(false);
+
+  React.useEffect(() => {
+    const remindAt = readRemindLaterTimestamp();
+    if (remindAt && remindAt > Date.now()) {
+      setHideBanner(true);
+    } else if (remindAt && remindAt <= Date.now()) {
+      persistRemindLaterTimestamp(null);
+      setHideBanner(false);
+    }
+  }, [setHideBanner]);
+
+  const handleConsentSelection = React.useCallback(
+    async (consent: "opted_in" | "opted_out") => {
+      if (isProcessing) {
+        return;
+      }
+      setIsProcessing(true);
+      try {
+        await updateSettings({ telemetryConsent: consent });
+        setHideBanner(true);
+        persistRemindLaterTimestamp(null);
+        logTelemetryInteraction(
+          "handleConsentSelection",
+          "User updated telemetry consent.",
+          consent,
+        );
+      } catch (error) {
+        console.error("Failed to update telemetry settings", error);
+        logTelemetryInteraction(
+          "handleConsentSelection",
+          "Failed to update telemetry consent.",
+          consent,
+          error,
+        );
+        setHideBanner(false);
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [isProcessing, setHideBanner, updateSettings],
+  );
+
+  const handleRemindLater = React.useCallback(() => {
+    const remindAt = Date.now() + TELEMETRY_REMIND_LATER_INTERVAL_MS;
+    persistRemindLaterTimestamp(remindAt);
+    setHideBanner(true);
+    logTelemetryInteraction(
+      "handleRemindLater",
+      "User postponed telemetry consent decision.",
+      "later",
+    );
+  }, [setHideBanner]);
+
   if (hideBanner) {
     return null;
   }
@@ -46,25 +159,28 @@ export function PrivacyBanner() {
           <Button
             variant="default"
             onClick={() => {
-              updateSettings({ telemetryConsent: "opted_in" });
+              void handleConsentSelection("opted_in");
             }}
             data-testid="telemetry-accept-button"
+            disabled={isProcessing}
           >
             Accept
           </Button>
           <Button
             variant="secondary"
             onClick={() => {
-              updateSettings({ telemetryConsent: "opted_out" });
+              void handleConsentSelection("opted_out");
             }}
             data-testid="telemetry-reject-button"
+            disabled={isProcessing}
           >
             Reject
           </Button>
           <Button
             variant="ghost"
-            onClick={() => setHideBanner(true)}
+            onClick={handleRemindLater}
             data-testid="telemetry-later-button"
+            disabled={isProcessing}
           >
             Later
           </Button>
