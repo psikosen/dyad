@@ -54,6 +54,10 @@ function readRemindLaterTimestamp(): number | null {
     window.localStorage.removeItem(TELEMETRY_REMIND_LATER_KEY);
     return null;
   }
+  if (parsedValue <= Date.now()) {
+    window.localStorage.removeItem(TELEMETRY_REMIND_LATER_KEY);
+    return null;
+  }
   return parsedValue;
 }
 
@@ -72,16 +76,40 @@ export function PrivacyBanner() {
   const [hideBanner, setHideBanner] = useAtom(hideBannerAtom);
   const { settings, updateSettings } = useSettings();
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [remindAt, setRemindAt] = React.useState<number | null>(() => {
+    return readRemindLaterTimestamp();
+  });
 
   React.useEffect(() => {
-    const remindAt = readRemindLaterTimestamp();
-    if (remindAt && remindAt > Date.now()) {
-      setHideBanner(true);
-    } else if (remindAt && remindAt <= Date.now()) {
-      persistRemindLaterTimestamp(null);
-      setHideBanner(false);
+    if (!isBrowser) {
+      return;
     }
-  }, [setHideBanner]);
+    if (remindAt === null) {
+      setHideBanner(false);
+      return;
+    }
+
+    const now = Date.now();
+    if (remindAt <= now) {
+      persistRemindLaterTimestamp(null);
+      setRemindAt(null);
+      setHideBanner(false);
+      return;
+    }
+
+    setHideBanner(true);
+    const timeoutId = window.setTimeout(
+      () => {
+        persistRemindLaterTimestamp(null);
+        setRemindAt(null);
+      },
+      Math.max(remindAt - now, 0),
+    );
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [remindAt, setHideBanner]);
 
   const handleConsentSelection = React.useCallback(
     async (consent: "opted_in" | "opted_out") => {
@@ -93,6 +121,7 @@ export function PrivacyBanner() {
         await updateSettings({ telemetryConsent: consent });
         setHideBanner(true);
         persistRemindLaterTimestamp(null);
+        setRemindAt(null);
         logTelemetryInteraction(
           "handleConsentSelection",
           "User updated telemetry consent.",
@@ -111,19 +140,20 @@ export function PrivacyBanner() {
         setIsProcessing(false);
       }
     },
-    [isProcessing, setHideBanner, updateSettings],
+    [isProcessing, setHideBanner, setRemindAt, updateSettings],
   );
 
   const handleRemindLater = React.useCallback(() => {
-    const remindAt = Date.now() + TELEMETRY_REMIND_LATER_INTERVAL_MS;
-    persistRemindLaterTimestamp(remindAt);
+    const nextReminder = Date.now() + TELEMETRY_REMIND_LATER_INTERVAL_MS;
+    persistRemindLaterTimestamp(nextReminder);
+    setRemindAt(nextReminder);
     setHideBanner(true);
     logTelemetryInteraction(
       "handleRemindLater",
       "User postponed telemetry consent decision.",
       "later",
     );
-  }, [setHideBanner]);
+  }, [setHideBanner, setRemindAt]);
 
   if (hideBanner) {
     return null;
